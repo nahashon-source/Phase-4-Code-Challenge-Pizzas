@@ -1,132 +1,148 @@
+
 #!/usr/bin/env python3
-
-import os
-import logging
-from flask import Flask, request, jsonify
-from flask_migrate import Migrate
 from models import db, Restaurant, RestaurantPizza, Pizza
+from flask_migrate import Migrate
+from flask import Flask, request, make_response
+from flask_restful import Api, Resource
+import os
 
-# Set up logging
-logging.basicConfig(level=logging.DEBUG)
-
-# Set up the base directory and database URI
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 DATABASE = os.environ.get("DB_URI", f"sqlite:///{os.path.join(BASE_DIR, 'app.db')}")
 
 app = Flask(__name__)
-app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config["SQLALCHEMY_DATABASE_URI"] = DATABASE
+app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 app.json.compact = False
 
-# Initialize the database and migration
+migrate = Migrate(app, db,render_as_batch=True)
+
 db.init_app(app)
-migrate = Migrate(app, db)
 
-# Routes
-@app.route('/')
+api = Api(app)
+
+@app.route("/")
 def index():
-    return '<h1>Code Challenge: Pizza Restaurant API</h1>'
+    return "<h1>Code challenge</h1>"
 
-# Route for getting all restaurants
-@app.route('/restaurants', methods=['GET'])
-def get_restaurants():
-    try:
-        app.logger.debug("Fetching all restaurants.")
+@app.route("/restaurants", methods = ["GET","POST"])
+def restaurants():
+    if request.method == "GET":
         restaurants = Restaurant.query.all()
-        return jsonify([restaurant.to_dict() for restaurant in restaurants]), 200
-    except Exception as e:
-        app.logger.error(f"Error retrieving restaurants: {e}")
-        return jsonify({"error": str(e)}), 500  # Improved error logging
+        restaurants_dict = [restaurant.to_dict(rules = ("-restaurant_pizzas",)) for restaurant in restaurants]
+        response = make_response(restaurants_dict,200,{"Content-Type":"application/json"})
+        return response
 
-# Route for getting a restaurant by ID
-@app.route('/restaurants/<int:id>', methods=['GET'])
-def get_restaurant(id):
-    try:
-        app.logger.debug(f"Fetching restaurant with ID: {id}")
-        restaurant = Restaurant.query.get(id)
-        if not restaurant:
-            app.logger.warning(f"Restaurant with ID {id} not found.")
-            return jsonify(error="Restaurant not found"), 404
-        return jsonify(restaurant.to_dict()), 200
-    except Exception as e:
-        app.logger.error(f"Error retrieving restaurant with ID {id}: {e}")
-        return jsonify(error="An error occurred while retrieving the restaurant."), 500
-
-# Route for deleting a restaurant by ID
-@app.route('/restaurants/<int:id>', methods=['DELETE'])
-def delete_restaurant(id):
-    try:
-        app.logger.debug(f"Attempting to delete restaurant with ID: {id}")
-        restaurant = Restaurant.query.get(id)
-        if not restaurant:
-            app.logger.warning(f"Restaurant with ID {id} not found.")
-            return jsonify(error="Restaurant not found"), 404
-        
-        db.session.delete(restaurant)
-        db.session.commit()
-        return '', 204
-    except Exception as e:
-        db.session.rollback()
-        app.logger.error(f"Error deleting restaurant with ID {id}: {e}")
-        return jsonify(error="An error occurred while deleting the restaurant."), 500
-
-# Route for getting all pizzas
-@app.route('/pizzas', methods=['GET'])
-def get_pizzas():
-    try:
-        pizzas = Pizza.query.all()
-        if not pizzas:
-            app.logger.debug("No pizzas found.")
-            return jsonify([]), 200  # Return an empty list if no pizzas found
-        return jsonify([pizza.to_dict() for pizza in pizzas]), 200
-    except Exception as e:
-        app.logger.error(f"Error retrieving pizzas: {e}")
-        return jsonify(error="An error occurred while retrieving pizzas."), 500
-
-# Route for creating restaurant_pizzas
-@app.route('/restaurant_pizzas', methods=['POST'])
-def create_restaurant_pizza():
-    data = request.get_json()
-    app.logger.debug(f"Creating restaurant_pizza with data: {data}")
-    try:
-        errors = []
-        if not all(key in data for key in ('restaurant_id', 'pizza_id', 'price')):
-            errors.append("Missing required fields.")
-        
-        price = data.get('price')
-        if not isinstance(price, (int, float)) or not (1 <= price <= 30):
-            errors.append("Price must be between 1 and 30.")
-
-        if errors:
-            return jsonify({"errors": errors}), 400
-
-        # Check if restaurant and pizza exist
-        restaurant = Restaurant.query.get(data['restaurant_id'])
-        pizza = Pizza.query.get(data['pizza_id'])
-
-        if not restaurant:
-            errors.append("Restaurant not found.")
-        if not pizza:
-            errors.append("Pizza not found.")
-
-        if errors:
-            return jsonify({"errors": errors}), 400
-
-        # Create the new restaurant_pizza record
-        new_rp = RestaurantPizza(
-            restaurant_id=data['restaurant_id'],
-            pizza_id=data['pizza_id'],
-            price=price
+    elif request.method == "POST":
+        restaurant = Restaurant(
+            name = request.get_json()["name"],
+            address = request.get_json()["address"]
         )
-        db.session.add(new_rp)
+        db.session.add(restaurant)
         db.session.commit()
+        response = make_response(restaurant.to_dict(),201,{"Content-Type":"application/json"})
+        return response
 
-        app.logger.debug(f"Created restaurant_pizza: {new_rp.to_dict()}")
-        return jsonify(new_rp.to_dict()), 201
-    except Exception as e:
-        db.session.rollback()
-        app.logger.error(f"Error creating restaurant pizza: {e}")
-        return jsonify({"errors": ["An internal error occurred."]}), 500
 
-if __name__ == '__main__':
+@app.route("/restaurants/<int:id>",methods = ["GET","PATCH","DELETE"])
+def restaurant_by_id(id):
+    restaurant = Restaurant.query.filter(Restaurant.id == id).first()
+
+    if restaurant:
+        if request.method == "GET":
+            response = make_response(restaurant.to_dict(),200,{"Content-Type":"application/json"})
+            return response
+        
+        elif request.method == "PATCH":
+            for attr in request.get_json():
+                setattr(restaurant,attr,request.get_json()[attr])
+            db.session.add(restaurant)
+            db.session.commit()
+
+            response = make_response(restaurant.to_dict(),200,{"Content-Type":"application/json"})
+            return response
+        
+        elif request.method == "DELETE":
+            db.session.delete(restaurant)
+            db.session.commit()
+            response = make_response({},204)
+            return response
+    
+    else:
+        message = {"error": "Restaurant not found"}
+        return make_response(message,404)
+
+
+@app.route("/pizzas",methods = ["GET","POST"])
+def pizzas():
+    if request.method == "GET":
+        pizzas = Pizza.query.all()
+        pizzas_dict = [pizza.to_dict(rules = ("-restaurant_pizzas",)) for pizza in pizzas]
+        response = make_response(pizzas_dict, 200, {"Content-Type":"application/json"})
+        return response
+    
+    elif request.method == "POST":
+        pizza = Pizza(
+            name = request.get_json()["name"],
+            ingredients = request.get_json()["ingredients"]
+        )
+        db.session.add(pizza)
+        db.session.commit()
+        response = make_response(pizza.to_dict(),201,{"Content-Type":"application/json"})
+        return response
+
+
+@app.route("/restaurant_pizzas",methods = ["GET","POST"])
+def restaurant_pizzas():
+    if request.method == "GET":
+        restaurant_pizzas = RestaurantPizza.query.all()
+        restaurant_pizzas_dict = [restaurant_pizza.to_dict() for restaurant_pizza in restaurant_pizzas]
+        response = make_response(restaurant_pizzas_dict,200,{"Content-Type":"application/json"})
+        return response
+    
+    elif request.method == "POST":
+        try:
+            restaurant_pizza = RestaurantPizza(
+                price = request.get_json()["price"],
+                restaurant_id = request.get_json()["restaurant_id"],
+                pizza_id = request.get_json()["pizza_id"]
+            )
+            db.session.add(restaurant_pizza)
+            db.session.commit()
+            response = make_response(restaurant_pizza.to_dict(),201,{"Content-Type":"application/json"})
+            return response
+        
+        except ValueError:
+            message = {"errors":["validation errors"]}
+            response = make_response(message,400)
+            return response
+
+
+@app.route("/pizzas/<int:id>", methods = ["GET","PATCH","DELETE"])
+def pizza_by_id(id):
+    pizza = Pizza.query.filter(Pizza.id == id).first()
+    if pizza:
+        if request.method == "GET":
+            response = make_response(pizza.to_dict(),200,{"Content-Type":"application/json"})
+            return response
+        
+        elif request.method == "PATCH":
+            for attr in request.get_json():
+                setattr(pizza,attr,request.get_json()[attr])
+                db.session.add(pizza)
+                db.session.commit()
+                response = make_response(pizza.to_dict(),200,{"Content-Type":"application/json"})
+                return response
+        
+        elif request.method == "DELETE":
+            db.session.delete(pizza)
+            db.session.commit()
+            response = make_response({},204)
+            return response
+    
+    else:
+        message = {"error":f"Pizza {id} not found."}
+        response = make_response(message,404)
+        return response
+
+if __name__ == "__main__":
     app.run(port=5555, debug=True)
